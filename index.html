@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Sorcerer Supreme — Magic Shield AR</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ember:   #FF6B00;
+    --gold:    #FFB347;
+    --spark:   #FFE066;
+    --deep:    #1a0800;
+    --glow:    #FF8C00;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: 'Cinzel', serif;
+  }
+
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 24px;
+    background: radial-gradient(ellipse at center, #1a0400 0%, #000 80%);
+    z-index: 10;
+    transition: opacity .6s ease;
+  }
+  #overlay h1 {
+    font-size: clamp(1.4rem, 4vw, 2.8rem);
+    font-weight: 900;
+    letter-spacing: .25em;
+    text-transform: uppercase;
+    color: var(--ember);
+    text-shadow: 0 0 30px var(--ember), 0 0 60px var(--gold);
+  }
+  #overlay p {
+    color: #cc8844;
+    letter-spacing: .12em;
+    font-size: .9rem;
+    max-width: 380px;
+    text-align: center;
+    line-height: 1.7;
+  }
+  #startBtn {
+    margin-top: 12px;
+    padding: 14px 42px;
+    border: 2px solid var(--ember);
+    background: transparent;
+    color: var(--gold);
+    font-family: 'Cinzel', serif;
+    font-size: 1rem;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: color .3s, box-shadow .3s;
+  }
+  #startBtn::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: var(--ember);
+    transform: scaleX(0); transform-origin: left;
+    transition: transform .35s ease;
+    z-index: -1;
+  }
+  #startBtn:hover { color: #000; box-shadow: 0 0 30px var(--ember); }
+  #startBtn:hover::before { transform: scaleX(1); }
+
+  #container {
+    position: relative; width: 100vw; height: 100vh;
+    display: none;
+  }
+  #webcam {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+  }
+  #shield-canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  #status {
+    position: absolute; bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    color: var(--gold);
+    font-size: .75rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    opacity: .7;
+    text-shadow: 0 0 10px var(--ember);
+  }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <h1>✦ Sorcerer Supreme ✦</h1>
+  <p>Open your palm toward the camera.<br/>The shield of the Vishanti will manifest.</p>
+  <button id="startBtn">Invoke the Mandalay</button>
+</div>
+
+<div id="container">
+  <video id="webcam" autoplay playsinline muted></video>
+  <canvas id="shield-canvas"></canvas>
+  <div id="status">Awaiting hand…</div>
+</div>
+
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+// ─── BOOT ────────────────────────────────────────────────────────────────────
+document.getElementById('startBtn').addEventListener('click', async () => {
+  document.getElementById('overlay').style.opacity = '0';
+  setTimeout(() => {
+    document.getElementById('overlay').style.display = 'none';
+    document.getElementById('container').style.display = 'block';
+  }, 600);
+  init();
+});
+
+// ─── GLOBALS ─────────────────────────────────────────────────────────────────
+const COLORS = {
+  ember:  '#FF6B00',
+  gold:   '#FFB347',
+  spark:  '#FFE066',
+  white:  '#FFF5E0',
+};
+
+let canvas, ctx, videoEl;
+let palmX = 0, palmY = 0, palmR = 100;
+let targetX = 0, targetY = 0, targetR = 100;
+let handVisible = false;
+
+let rot1 = 0, rot2 = 0, rot3 = 0;   // ring rotations
+let sparkles = [];
+let tick = 0;
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+async function init() {
+  videoEl = document.getElementById('webcam');
+  canvas  = document.getElementById('shield-canvas');
+  ctx     = canvas.getContext('2d');
+
+  resize();
+  window.addEventListener('resize', resize);
+
+  // MediaPipe Hands
+  const hands = new Hands({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+  });
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6,
+  });
+  hands.onResults(onResults);
+
+  const camera = new Camera(videoEl, {
+    onFrame: async () => { await hands.send({ image: videoEl }); },
+    width: 1280, height: 720,
+  });
+  camera.start();
+
+  requestAnimationFrame(loop);
+}
+
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+
+// ─── MEDIAPIPE CALLBACK ───────────────────────────────────────────────────────
+function onResults(results) {
+  const status = document.getElementById('status');
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    handVisible = false;
+    status.textContent = 'Awaiting hand…';
+    return;
+  }
+  handVisible = true;
+  status.textContent = 'Shield active';
+
+  const lm = results.multiHandLandmarks[0];
+  const W = canvas.width, H = canvas.height;
+
+  // Mirror X because video is CSS-mirrored
+  const mx = lx => (1 - lx) * W;
+  const my = ly => ly * H;
+
+  // Palm centre = average of wrist + base knuckles (0,5,9,13,17)
+  const pts = [0,5,9,13,17].map(i => ({ x: mx(lm[i].x), y: my(lm[i].y) }));
+  const cx = pts.reduce((s,p) => s+p.x,0) / pts.length;
+  const cy = pts.reduce((s,p) => s+p.y,0) / pts.length;
+
+  // Radius = distance wrist → middle-finger-MCP (9)
+  const dx = mx(lm[9].x)  - mx(lm[0].x);
+  const dy = my(lm[9].y)  - my(lm[0].y);
+  const d  = Math.sqrt(dx*dx + dy*dy);
+
+  targetX = cx;
+  targetY = cy;
+  targetR = d * 1.35;
+}
+
+// ─── SPARKLE SYSTEM ──────────────────────────────────────────────────────────
+function spawnSparkle(cx, cy, r) {
+  const angle = Math.random() * Math.PI * 2;
+  const dist  = r * (.5 + Math.random() * .6);
+  sparkles.push({
+    x: cx + Math.cos(angle) * dist,
+    y: cy + Math.sin(angle) * dist,
+    vx: (Math.random()-.5) * 1.2,
+    vy: (Math.random()-.5) * 1.2,
+    life: 1,
+    decay: .018 + Math.random() * .025,
+    size: 1.5 + Math.random() * 3,
+    color: Math.random() < .5 ? COLORS.spark : COLORS.gold,
+  });
+}
+
+function updateSparkles() {
+  for (let s of sparkles) {
+    s.x += s.vx; s.y += s.vy;
+    s.life -= s.decay;
+  }
+  sparkles = sparkles.filter(s => s.life > 0);
+}
+
+function drawSparkles() {
+  for (let s of sparkles) {
+    ctx.save();
+    ctx.globalAlpha = s.life * .9;
+    ctx.fillStyle = s.color;
+    ctx.shadowColor = s.color;
+    ctx.shadowBlur = 8;
+    // 4-point star
+    const sz = s.size * s.life;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const r = i % 2 === 0 ? sz : sz * .35;
+      i === 0 ? ctx.moveTo(s.x + Math.cos(a)*r, s.y + Math.sin(a)*r)
+              : ctx.lineTo(s.x + Math.cos(a)*r, s.y + Math.sin(a)*r);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ─── SHIELD DRAWING ───────────────────────────────────────────────────────────
+function drawShield(cx, cy, r) {
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  const glow = (color, blur) => { ctx.shadowColor = color; ctx.shadowBlur = blur; };
+
+  // ── BACKGROUND DISC (subtle) ─────────────────────────────────────────
+  const bg = ctx.createRadialGradient(0,0,0, 0,0,r);
+  bg.addColorStop(0,   'rgba(255,120,0,.18)');
+  bg.addColorStop(.6,  'rgba(255,70,0,.10)');
+  bg.addColorStop(1,   'rgba(255,40,0,0)');
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.fillStyle = bg; ctx.fill();
+
+  // ── RING 1 — outer, slow CW ──────────────────────────────────────────
+  drawRing(r * .92, 6, rot1, 24, COLORS.ember, 14, 1.5);
+
+  // ── RING 2 — mid, CCW, rune symbols ─────────────────────────────────
+  drawRuneRing(r * .70, rot2, 16);
+
+  // ── RING 3 — inner, fast CW ──────────────────────────────────────────
+  drawRing(r * .50, 4, rot3, 32, COLORS.gold, 10, 1.2);
+
+  // ── MANDALA SPOKES ───────────────────────────────────────────────────
+  drawSpokes(r * .85, 8, rot1);
+
+  // ── INNER GEOMETRY ───────────────────────────────────────────────────
+  drawInnerGeometry(r * .42, rot2 * 1.5);
+
+  // ── CENTRE SIGIL ────────────────────────────────────────────────────
+  drawCentreSigil(r * .18);
+
+  // ── OUTER GLOW RING (pulsing) ────────────────────────────────────────
+  const pulse = .7 + .3 * Math.sin(tick * .06);
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.strokeStyle = COLORS.ember;
+  ctx.lineWidth = 2 * pulse;
+  glow(COLORS.ember, 40 * pulse);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ─── RING with dashes ────────────────────────────────────────────────────────
+function drawRing(r, lineW, angle, dashCount, color, glowB, glowW) {
+  ctx.save();
+  ctx.rotate(angle);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineW;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = glowB * (1 + glowW * Math.sin(tick*.07));
+
+  const dashLen = (2 * Math.PI * r) / (dashCount * 2);
+  ctx.setLineDash([dashLen * 1.3, dashLen * .7]);
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.stroke();
+
+  // thin inner border
+  ctx.lineWidth = 1;
+  ctx.shadowBlur = glowB * .4;
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ─── RUNE RING ───────────────────────────────────────────────────────────────
+const RUNES = ['ᚠ','ᚢ','ᚦ','ᚨ','ᚱ','ᚲ','ᚷ','ᚹ','ᚺ','ᚾ','ᛁ','ᛃ','ᛇ','ᛈ','ᛉ','ᛊ'];
+function drawRuneRing(r, angle, count) {
+  ctx.save();
+  ctx.rotate(angle);
+
+  // ring line
+  ctx.strokeStyle = COLORS.gold;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = COLORS.gold;
+  ctx.shadowBlur = 18;
+  ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2);
+  ctx.stroke();
+
+  // rune glyphs
+  ctx.fillStyle = COLORS.spark;
+  ctx.shadowBlur = 12;
+  ctx.font = `${r * .18}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    ctx.save();
+    ctx.rotate(a);
+    ctx.translate(r, 0);
+    ctx.rotate(-a - angle);
+    ctx.fillText(RUNES[i % RUNES.length], 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// ─── SPOKES ──────────────────────────────────────────────────────────────────
+function drawSpokes(r, n, angle) {
+  ctx.save();
+  ctx.rotate(angle);
+  ctx.strokeStyle = COLORS.ember;
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = COLORS.ember;
+  ctx.shadowBlur = 20;
+  ctx.globalAlpha = .5;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ─── INNER GEOMETRY ──────────────────────────────────────────────────────────
+function drawInnerGeometry(r, angle) {
+  ctx.save();
+  ctx.rotate(angle);
+  ctx.strokeStyle = COLORS.gold;
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = COLORS.gold;
+  ctx.shadowBlur = 16;
+
+  // Double triangle (Star of David form)
+  for (let flip = 0; flip < 2; flip++) {
+    ctx.beginPath();
+    for (let i = 0; i <= 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + (flip ? Math.PI / 3 : 0);
+      const x = Math.cos(a) * r, y = Math.sin(a) * r;
+      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Hexagon
+  ctx.beginPath();
+  for (let i = 0; i <= 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const x = Math.cos(a) * r * .6, y = Math.sin(a) * r * .6;
+    i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ─── CENTRE SIGIL ─────────────────────────────────────────────────────────────
+function drawCentreSigil(r) {
+  const pulse = .85 + .15 * Math.sin(tick * .1);
+
+  // Bright core disc
+  const cg = ctx.createRadialGradient(0,0,0, 0,0,r);
+  cg.addColorStop(0, COLORS.spark);
+  cg.addColorStop(.5, COLORS.gold);
+  cg.addColorStop(1, 'rgba(255,100,0,0)');
+  ctx.beginPath(); ctx.arc(0,0,r * pulse,0,Math.PI*2);
+  ctx.fillStyle = cg;
+  ctx.shadowColor = COLORS.spark;
+  ctx.shadowBlur = 30;
+  ctx.fill();
+
+  // Small circle ring
+  ctx.beginPath(); ctx.arc(0,0,r * 1.2 * pulse,0,Math.PI*2);
+  ctx.strokeStyle = COLORS.spark;
+  ctx.lineWidth = 1.5;
+  ctx.shadowBlur = 20;
+  ctx.stroke();
+
+  // Cross
+  ctx.beginPath();
+  ctx.moveTo(-r*.8, 0); ctx.lineTo(r*.8, 0);
+  ctx.moveTo(0, -r*.8); ctx.lineTo(0, r*.8);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = COLORS.white;
+  ctx.shadowColor = COLORS.white;
+  ctx.shadowBlur = 10;
+  ctx.stroke();
+}
+
+// ─── TETHER (light trail from palm to nowhere) ───────────────────────────────
+function drawTether(cx, cy) {
+  if (!handVisible) return;
+  const len = 60 + 20 * Math.sin(tick*.04);
+  for (let i = 0; i < 3; i++) {
+    const a = rot1 + (i / 3) * Math.PI * 2;
+    const x2 = cx + Math.cos(a) * len;
+    const y2 = cy + Math.sin(a) * len;
+    const g = ctx.createLinearGradient(cx, cy, x2, y2);
+    g.addColorStop(0, COLORS.ember);
+    g.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.moveTo(cx, cy); ctx.lineTo(x2, y2);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = COLORS.ember;
+    ctx.shadowBlur = 14;
+    ctx.stroke();
+  }
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────────────────────
+function loop() {
+  tick++;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (handVisible) {
+    // Smooth follow
+    palmX += (targetX - palmX) * .14;
+    palmY += (targetY - palmY) * .14;
+    palmR += (targetR - palmR) * .12;
+
+    // Rotate rings
+    rot1 +=  .004;
+    rot2 -=  .007;
+    rot3 +=  .013;
+
+    // Spawn sparkles
+    if (tick % 3 === 0) spawnSparkle(palmX, palmY, palmR);
+  } else {
+    // Fade out size when no hand
+    palmR += (80 - palmR) * .05;
+    rot1 += .001; rot2 -= .002; rot3 += .003;
+  }
+
+  updateSparkles();
+  drawSparkles();
+
+  if (handVisible || palmR > 30) {
+    drawTether(palmX, palmY);
+    ctx.globalAlpha = handVisible ? 1 : Math.max(0, (palmR - 30) / 50);
+    drawShield(palmX, palmY, palmR);
+    ctx.globalAlpha = 1;
+  }
+
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+  </html>
